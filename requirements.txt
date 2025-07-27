@@ -1,0 +1,44 @@
+# requirements.txt
+# クイズアプリケーション依存関係
+
+# === 既存パッケージ（Week 3まで） ===
+# 設定管理・バリデーション
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# === 新規追加（Week 4: SQLite対応） ===
+# データベース
+sqlalchemy==2.0.23
+# SQLite は Python 標準ライブラリに含まれるため追加パッケージ不要
+
+# === 将来の拡張用（コメントアウト） ===
+# PostgreSQL対応時に有効化
+# psycopg2-binary==2.9.9
+
+# MySQL対応時に有効化  
+# pymysql==1.1.0
+
+# データベースマイグレーション（将来）
+# alembic==1.12.1
+
+# === 開発・テスト用（オプション） ===
+# データベースブラウザ・デバッグ用
+# sqlite-web==0.4.1
+
+# テスト用（将来）
+# pytest==7.4.3
+# pytest-asyncio==0.21.1
+
+# === 注意事項 ===
+# tkinter は Python 標準ライブラリに含まれるため不要
+# json, csv, logging, os, pathlib も標準ライブラリのため不要
+# uuid, datetime も標準ライブラリのため不要
+
+# === インストール手順 ===
+# pip install -r requirements.txt
+
+# === 開発環境セットアップ ===
+# 1. pip install -r requirements.txt
+# 2. python main.py で起動
+# 3. データベースは自動作成される（quiz_app.db）

@@ -1,7 +1,7 @@
 # csv_reader.py
 """
 CSVファイルから4択クイズデータを読み込むクラス
-Week 4: pydanticモデルとデータバリデーション強化版
+Week 4: pydanticモデルとデータバリデーション強化版 + DB統合
 """
 
 import csv
@@ -13,24 +13,42 @@ from quiz_schema import QuizSchema
 from models import QuestionModel, DataQualityReport
 from logger import get_logger
 
+# データベース統合用（オプション）
+try:
+    from database import get_db_session, DatabaseQuestion
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
+
 
 class QuizCSVReader:
-    """CSVファイルからクイズデータを読み込むクラス（Week 4強化版）"""
+    """CSVファイルからクイズデータを読み込むクラス（Week 4強化版 + DB統合）"""
     
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, auto_import_to_db: bool = False, database_url: str = None):
         """
         初期化
         
         Args:
             file_path (str): CSVファイルのパス
+            auto_import_to_db (bool): 読み込み時に自動でDBにインポートするか
+            database_url (str): データベースURL（auto_import_to_dbがTrueの時のみ使用）
         """
         self.logger = get_logger()
         self.file_path = file_path
+        self.auto_import_to_db = auto_import_to_db and DATABASE_AVAILABLE
+        self.database_url = database_url
         self.validation_result = None
         self.detected_headers = []
         self.data_quality_report: Optional[DataQualityReport] = None
         
+        # データベース統合関連
+        self.db_import_result = None
+        self.imported_question_ids = []
+        
         self.logger.debug(f"QuizCSVReader initializing with file: {file_path}")
+        if self.auto_import_to_db:
+            self.logger.debug("Auto-import to database enabled")
+        
         self._validate_file()
         self._analyze_csv_structure()
     
@@ -133,7 +151,7 @@ class QuizCSVReader:
     
     def load_questions(self) -> List[Dict]:
         """
-        CSVファイルから問題データを読み込む（Week 4強化版）
+        CSVファイルから問題データを読み込む（Week 4強化版 + DB統合）
         
         Returns:
             List[Dict]: バリデーション済み問題データのリスト
@@ -178,6 +196,10 @@ class QuizCSVReader:
             # データ品質レポートを生成
             self._generate_quality_report(questions, validation_errors, warnings)
             
+            # 自動データベースインポート
+            if self.auto_import_to_db and questions:
+                self._auto_import_to_database(questions)
+            
             self.logger.info(f"Successfully loaded {len(questions)} questions from {self.file_path}")
             
             # エラーがある場合の処理
@@ -213,6 +235,133 @@ class QuizCSVReader:
             )
         
         return questions
+    
+    def _auto_import_to_database(self, questions: List[Dict]) -> None:
+        """
+        問題データを自動的にデータベースにインポート
+        
+        Args:
+            questions: 問題データリスト
+        """
+        if not DATABASE_AVAILABLE:
+            self.logger.warning("Database not available for auto-import")
+            return
+        
+        try:
+            from pathlib import Path
+            csv_filename = Path(self.file_path).name
+            imported_count = 0
+            duplicate_count = 0
+            
+            with get_db_session(self.database_url) as session:
+                for question_dict in questions:
+                    # 重複チェック
+                    existing = session.query(DatabaseQuestion).filter(
+                        DatabaseQuestion.question == question_dict['question'],
+                        DatabaseQuestion.csv_source_file == csv_filename
+                    ).first()
+                    
+                    if existing:
+                        duplicate_count += 1
+                        self.imported_question_ids.append(existing.id)
+                        continue
+                    
+                    # 新規作成
+                    db_question = DatabaseQuestion.from_legacy_dict(
+                        question_dict,
+                        csv_filename
+                    )
+                    
+                    session.add(db_question)
+                    session.flush()  # IDを取得するため
+                    
+                    self.imported_question_ids.append(db_question.id)
+                    imported_count += 1
+                
+                session.commit()
+            
+            self.db_import_result = {
+                'imported_count': imported_count,
+                'duplicate_count': duplicate_count,
+                'total_questions': len(questions),
+                'csv_filename': csv_filename
+            }
+            
+            self.logger.info(f"Auto-imported {imported_count} questions to database ({duplicate_count} duplicates skipped)")
+            
+        except Exception as e:
+            self.logger.error(f"Auto-import to database failed: {e}")
+            self.db_import_result = {
+                'error': str(e),
+                'imported_count': 0
+            }
+    
+    def import_to_database(self, database_url: str = None, overwrite: bool = False) -> Dict[str, Any]:
+        """
+        現在読み込み済みの問題データをデータベースにインポート
+        
+        Args:
+            database_url: データベースURL
+            overwrite: 既存データを上書きするか
+            
+        Returns:
+            Dict: インポート結果
+        """
+        if not DATABASE_AVAILABLE:
+            return {'error': 'Database not available', 'imported_count': 0}
+        
+        try:
+            # 問題データを再取得（まだ読み込んでいない場合）
+            if not hasattr(self, '_cached_questions'):
+                self._cached_questions = self.load_questions()
+            
+            if not self._cached_questions:
+                return {'error': 'No questions to import', 'imported_count': 0}
+            
+            from pathlib import Path
+            csv_filename = Path(self.file_path).name
+            imported_count = 0
+            duplicate_count = 0
+            
+            with get_db_session(database_url or self.database_url) as session:
+                for question_dict in self._cached_questions:
+                    # 重複チェック（overwriteがFalseの場合）
+                    if not overwrite:
+                        existing = session.query(DatabaseQuestion).filter(
+                            DatabaseQuestion.question == question_dict['question'],
+                            DatabaseQuestion.csv_source_file == csv_filename
+                        ).first()
+                        
+                        if existing:
+                            duplicate_count += 1
+                            continue
+                    
+                    # DatabaseQuestionに変換
+                    db_question = DatabaseQuestion.from_legacy_dict(
+                        question_dict,
+                        csv_filename
+                    )
+                    
+                    session.add(db_question)
+                    imported_count += 1
+                
+                session.commit()
+            
+            result = {
+                'imported_count': imported_count,
+                'duplicate_count': duplicate_count,
+                'total_questions': len(self._cached_questions),
+                'csv_filename': csv_filename,
+                'overwrite_mode': overwrite
+            }
+            
+            self.logger.info(f"Manual import completed: {imported_count} questions imported")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Manual import failed: {e}")
+            return {'error': str(e), 'imported_count': 0}
     
     def _check_question_quality(self, question: QuestionModel, row_num: int, warnings: List[Dict]) -> None:
         """個別問題の品質をチェック"""
@@ -376,6 +525,22 @@ class QuizCSVReader:
         except Exception:
             return False
     
+    def is_database_available(self) -> bool:
+        """データベース機能が利用可能かチェック"""
+        return DATABASE_AVAILABLE
+    
+    def can_auto_import(self) -> bool:
+        """自動インポートが有効かチェック"""
+        return self.auto_import_to_db and DATABASE_AVAILABLE
+    
+    def get_database_import_result(self) -> Optional[Dict[str, Any]]:
+        """データベースインポート結果を取得"""
+        return self.db_import_result
+    
+    def get_imported_question_ids(self) -> List[int]:
+        """インポートされた問題のIDリストを取得"""
+        return self.imported_question_ids.copy() if self.imported_question_ids else []
+    
     def get_sample_extra_data(self) -> Dict[str, str]:
         """サンプルの追加データを取得（UI表示用）"""
         if not self.validation_result:
@@ -427,6 +592,16 @@ class QuizCSVReader:
                     f.write("✅ 高品質なデータです\n")
                 else:
                     f.write("⚠️ データ品質の改善を推奨します\n")
+                
+                # データベースインポート結果も追記
+                if self.db_import_result:
+                    f.write("\n=== データベースインポート結果 ===\n")
+                    if 'error' in self.db_import_result:
+                        f.write(f"エラー: {self.db_import_result['error']}\n")
+                    else:
+                        f.write(f"インポート済み: {self.db_import_result.get('imported_count', 0)}問\n")
+                        f.write(f"重複スキップ: {self.db_import_result.get('duplicate_count', 0)}問\n")
+                        f.write(f"CSVファイル: {self.db_import_result.get('csv_filename', 'N/A')}\n")
             
             self.logger.info(f"Quality report exported to {output_path}")
             
@@ -445,5 +620,12 @@ class QuizCSVReader:
 解説カバー率: {report.get_explanation_coverage():.1f}%
 エラー数: {len(report.validation_errors)}
 警告数: {len(report.warnings)}"""
+
+        # データベースインポート結果も追加
+        if self.db_import_result:
+            if 'error' in self.db_import_result:
+                summary += f"\nDBインポート: エラー"
+            else:
+                summary += f"\nDBインポート: {self.db_import_result.get('imported_count', 0)}問追加"
         
         return summary

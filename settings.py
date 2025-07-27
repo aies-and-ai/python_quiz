@@ -1,7 +1,7 @@
 # settings.py
 """
 強化された設定管理システム
-.env ファイル対応 + 型安全な設定管理
+.env ファイル対応 + 型安全な設定管理 + SQLite対応
 """
 
 import os
@@ -16,7 +16,7 @@ from enhanced_exceptions import ConfigurationError
 class QuizAppSettings(BaseSettings):
     """
     クイズアプリの設定クラス（pydantic BaseSettings使用）
-    環境変数と.envファイルから自動読み込み
+    環境変数と.envファイルから自動読み込み + SQLite対応
     """
     
     # === データ保存設定 ===
@@ -24,6 +24,15 @@ class QuizAppSettings(BaseSettings):
     auto_save: bool = Field(default=True, description="自動保存するかどうか")
     backup_enabled: bool = Field(default=True, description="バックアップを作成するかどうか")
     max_backup_files: int = Field(default=5, ge=1, le=20, description="保持するバックアップファイル数")
+    
+    # === データベース設定 ===
+    database_url: str = Field(default="sqlite:///quiz_app.db", description="データベース接続URL")
+    use_database: bool = Field(default=True, description="データベースを使用するかどうか")
+    database_pool_size: int = Field(default=5, ge=1, le=20, description="データベース接続プール数")
+    database_timeout: int = Field(default=30, ge=5, le=300, description="データベースタイムアウト(秒)")
+    auto_optimize_db: bool = Field(default=True, description="データベース自動最適化")
+    db_backup_enabled: bool = Field(default=True, description="データベースバックアップ有効")
+    db_backup_interval_hours: int = Field(default=24, ge=1, le=168, description="バックアップ間隔(時間)")
     
     # === ゲーム設定 ===
     shuffle_questions: bool = Field(default=True, description="問題の順序をシャッフルするかどうか")
@@ -58,13 +67,60 @@ class QuizAppSettings(BaseSettings):
     debug_mode: bool = Field(default=False, description="デバッグモード")
     performance_monitoring: bool = Field(default=False, description="パフォーマンス監視")
     error_reporting: bool = Field(default=True, description="エラーレポート送信")
-    
+    sql_echo: bool = Field(default=False, description="SQLクエリをログ出力するかどうか")
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         "env_prefix": "QUIZ_APP_"
     }
+    
+    @field_validator('database_url')
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """データベースURLの妥当性をチェック"""
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Database URL cannot be empty")
+        
+        # SQLite URLの基本チェック
+        if v.startswith('sqlite:///'):
+            # ファイルパスの妥当性チェック
+            import os
+            from pathlib import Path
+            
+            file_path = v.replace('sqlite:///', '')
+            try:
+                # パスの正規化
+                normalized_path = Path(file_path).resolve()
+                
+                # ディレクトリの書き込み権限チェック
+                parent_dir = normalized_path.parent
+                if parent_dir.exists() and not os.access(parent_dir, os.W_OK):
+                    raise ValueError(f"No write permission for directory: {parent_dir}")
+                
+                return v
+            except Exception as e:
+                raise ValueError(f"Invalid SQLite path: {e}")
+        
+        # その他のデータベースURL（PostgreSQL、MySQL等）の基本チェック
+        valid_schemes = ['sqlite', 'postgresql', 'mysql', 'oracle']
+        if not any(v.startswith(f'{scheme}:') for scheme in valid_schemes):
+            raise ValueError(f"Unsupported database scheme. Supported: {valid_schemes}")
+        
+        return v
+    
+    @field_validator('sql_echo')
+    @classmethod
+    def validate_sql_echo(cls, v: bool) -> bool:
+        """SQLエコー設定の妥当性チェック"""
+        # 本番環境では警告
+        import os
+        if v and os.getenv('QUIZ_APP_DEBUG_MODE', 'false').lower() != 'true':
+            import warnings
+            warnings.warn("SQL echo is enabled in non-debug mode. This may impact performance.")
+        
+        return v
     
     @field_validator('log_level')
     @classmethod
@@ -206,12 +262,14 @@ class SettingsManager:
             # カテゴリ別に設定を整理
             categories = {
                 "データ保存設定": ["data_file", "auto_save", "backup_enabled", "max_backup_files"],
+                "データベース設定": ["database_url", "use_database", "database_pool_size", "database_timeout", 
+                                   "auto_optimize_db", "db_backup_enabled", "db_backup_interval_hours"],
                 "ゲーム設定": ["shuffle_questions", "shuffle_options", "show_progress", "enable_hints"],
                 "ファイル設定": ["default_csv_file", "csv_encoding", "max_file_size_mb"],
                 "UI設定": ["window_width", "window_height", "window_title", "theme", "font_size"],
                 "ログ設定": ["log_level", "log_max_size_mb", "log_backup_count", "console_log_enabled"],
                 "パフォーマンス設定": ["max_questions_per_quiz", "cache_enabled", "preload_questions"],
-                "開発設定": ["debug_mode", "performance_monitoring", "error_reporting"]
+                "開発設定": ["debug_mode", "performance_monitoring", "error_reporting", "sql_echo"]
             }
             
             for category, keys in categories.items():
@@ -252,6 +310,32 @@ class SettingsManager:
         try:
             settings = self.get_settings()
             
+            # データベース設定の確認
+            if settings.use_database:
+                try:
+                    # データベースURL形式チェック
+                    if settings.database_url.startswith('sqlite:///'):
+                        from pathlib import Path
+                        db_path = settings.database_url.replace('sqlite:///', '')
+                        db_file = Path(db_path)
+                        
+                        if db_file.exists():
+                            # ファイルサイズチェック（100MB以上で警告）
+                            size_mb = db_file.stat().st_size / 1024 / 1024
+                            if size_mb > 100:
+                                validation_result["warnings"].append(f"Database file is large: {size_mb:.1f}MB")
+                        
+                        # 親ディレクトリの書き込み権限チェック
+                        parent_dir = db_file.parent
+                        if parent_dir.exists():
+                            import os
+                            if not os.access(parent_dir, os.W_OK):
+                                validation_result["errors"].append(f"No write permission for database directory: {parent_dir}")
+                                validation_result["is_valid"] = False
+                
+                except Exception as e:
+                    validation_result["warnings"].append(f"Database validation error: {e}")
+            
             # データファイルのパス確認
             data_file_path = Path(settings.data_file)
             if data_file_path.is_absolute() and not data_file_path.parent.exists():
@@ -288,6 +372,8 @@ class SettingsManager:
             "validation": validation,
             "key_settings": {
                 "auto_save": settings.auto_save,
+                "use_database": settings.use_database,
+                "database_url": settings.database_url.split('/')[-1] if settings.database_url else "N/A",  # ファイル名のみ表示
                 "shuffle_questions": settings.shuffle_questions,
                 "log_level": settings.log_level,
                 "debug_mode": settings.debug_mode,

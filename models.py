@@ -1,6 +1,6 @@
 # models.py
 """
-Week 4: データバリデーション強化
+Week 4: データバリデーション強化 + SQLite連携
 pydanticを使用した型安全なデータモデル
 """
 
@@ -8,6 +8,13 @@ from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, field_validator, Field, ConfigDict
 from enum import Enum
 from logger import get_logger
+
+# データベース統合用（オプション）
+try:
+    from database import get_db_session, DatabaseQuestion
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
 
 
 class DifficultyLevel(str, Enum):
@@ -27,8 +34,8 @@ class QuestionType(str, Enum):
 
 class QuestionModel(BaseModel):
     """
-    クイズ問題のデータモデル
-    CSVから読み込まれたデータを型安全に管理
+    クイズ問題のデータモデル + SQLite連携
+    CSVから読み込まれたデータとデータベースデータを型安全に管理
     """
     model_config = ConfigDict(
         str_strip_whitespace=True,  # 文字列の前後空白を自動削除
@@ -104,6 +111,17 @@ class QuestionModel(BaseModel):
     extra_data: Dict[str, Any] = Field(
         default_factory=dict,
         description="その他の追加データ"
+    )
+    
+    # === データベース関連フィールド（オプション） ===
+    db_id: Optional[int] = Field(
+        default=None,
+        description="データベースID"
+    )
+    
+    csv_source_file: Optional[str] = Field(
+        default=None,
+        description="元のCSVファイル名"
     )
     
     @field_validator('question')
@@ -243,6 +261,10 @@ class QuestionModel(BaseModel):
             'option_explanations': self.option_explanations
         }
         
+        # データベースIDがある場合は追加
+        if self.db_id:
+            result['id'] = self.db_id
+        
         # 追加データがある場合は extra_data として設定
         if self.extra_data or self.title or self.genre or self.difficulty:
             extra = self.extra_data.copy()
@@ -257,6 +279,8 @@ class QuestionModel(BaseModel):
                 extra['tags'] = self.tags
             if self.source:
                 extra['source'] = self.source
+            if self.csv_source_file:
+                extra['csv_source_file'] = self.csv_source_file
             
             if extra:
                 result['extra_data'] = extra
@@ -355,11 +379,170 @@ class QuestionModel(BaseModel):
                     original_error=e,
                     user_message=f"{row_number}行目のデータ処理中にエラーが発生しました"
                 )
+    
+    @classmethod
+    def from_database_question(cls, db_question) -> 'QuestionModel':
+        """
+        DatabaseQuestionからQuestionModelを作成
+        
+        Args:
+            db_question: DatabaseQuestionインスタンス
+            
+        Returns:
+            QuestionModel: バリデーション済みの問題データ
+        """
+        if not DATABASE_AVAILABLE:
+            raise ValueError("Database not available")
+        
+        try:
+            return cls(
+                question=db_question.question,
+                options=db_question.options,
+                correct_answer=db_question.correct_answer,
+                title=db_question.title,
+                explanation=db_question.explanation,
+                option_explanations=db_question.option_explanations or ["", "", "", ""],
+                genre=db_question.genre,
+                difficulty=db_question.difficulty,
+                tags=db_question.tags,
+                source=db_question.source,
+                extra_data=db_question.custom_metadata or {},
+                db_id=db_question.id,
+                csv_source_file=db_question.csv_source_file
+            )
+            
+        except Exception as e:
+            raise ValueError(f"Failed to convert DatabaseQuestion to QuestionModel: {str(e)}")
+    
+    def save_to_database(self, database_url: str = None, csv_filename: str = None) -> Optional[int]:
+        """
+        問題データをデータベースに保存
+        
+        Args:
+            database_url: データベースURL
+            csv_filename: CSVファイル名（元ファイル情報として保存）
+            
+        Returns:
+            int: 保存された問題のID、失敗時はNone
+        """
+        if not DATABASE_AVAILABLE:
+            get_logger().warning("Database not available for saving")
+            return None
+        
+        try:
+            with get_db_session(database_url) as session:
+                # 重複チェック
+                existing = session.query(DatabaseQuestion).filter(
+                    DatabaseQuestion.question == self.question,
+                    DatabaseQuestion.csv_source_file == csv_filename
+                ).first()
+                
+                if existing:
+                    get_logger().debug(f"Question already exists in database: ID {existing.id}")
+                    return existing.id
+                
+                # 新規作成
+                db_question = DatabaseQuestion.from_legacy_dict(
+                    self.to_legacy_dict(),
+                    csv_filename
+                )
+                
+                session.add(db_question)
+                session.flush()  # IDを取得
+                
+                saved_id = db_question.id
+                self.db_id = saved_id  # 自身のIDを更新
+                
+                get_logger().debug(f"Question saved to database: ID {saved_id}")
+                return saved_id
+                
+        except Exception as e:
+            get_logger().error(f"Failed to save question to database: {e}")
+            return None
+    
+    def update_in_database(self, database_url: str = None) -> bool:
+        """
+        データベース内の問題データを更新
+        
+        Args:
+            database_url: データベースURL
+            
+        Returns:
+            bool: 更新成功かどうか
+        """
+        if not DATABASE_AVAILABLE or not self.db_id:
+            return False
+        
+        try:
+            with get_db_session(database_url) as session:
+                db_question = session.query(DatabaseQuestion).filter(
+                    DatabaseQuestion.id == self.db_id
+                ).first()
+                
+                if not db_question:
+                    get_logger().warning(f"Question not found in database: ID {self.db_id}")
+                    return False
+                
+                # データを更新
+                db_question.question = self.question
+                db_question.options = self.options
+                db_question.correct_answer = self.correct_answer
+                db_question.explanation = self.explanation
+                db_question.option_explanations = self.option_explanations
+                db_question.title = self.title
+                db_question.genre = self.genre
+                db_question.difficulty = self.difficulty
+                db_question.tags = self.tags
+                db_question.source = self.source
+                db_question.custom_metadata = self.extra_data
+                
+                session.commit()
+                
+                get_logger().debug(f"Question updated in database: ID {self.db_id}")
+                return True
+                
+        except Exception as e:
+            get_logger().error(f"Failed to update question in database: {e}")
+            return False
+    
+    def delete_from_database(self, database_url: str = None) -> bool:
+        """
+        データベースから問題データを削除
+        
+        Args:
+            database_url: データベースURL
+            
+        Returns:
+            bool: 削除成功かどうか
+        """
+        if not DATABASE_AVAILABLE or not self.db_id:
+            return False
+        
+        try:
+            with get_db_session(database_url) as session:
+                db_question = session.query(DatabaseQuestion).filter(
+                    DatabaseQuestion.id == self.db_id
+                ).first()
+                
+                if not db_question:
+                    get_logger().warning(f"Question not found in database: ID {self.db_id}")
+                    return False
+                
+                # 論理削除
+                db_question.is_active = False
+                session.commit()
+                
+                get_logger().debug(f"Question deleted from database: ID {self.db_id}")
+                return True
+                
+        except Exception as e:
+            get_logger().error(f"Failed to delete question from database: {e}")
+            return False
 
 
 class QuizSessionModel(BaseModel):
     """
-    クイズセッションのデータモデル
+    クイズセッションのデータモデル + DB連携
     1回のクイズ実行の状態を管理
     """
     model_config = ConfigDict(
@@ -388,6 +571,12 @@ class QuizSessionModel(BaseModel):
         description="間違えた問題のリスト"
     )
     
+    # === データベース関連 ===
+    db_session_id: Optional[int] = Field(
+        default=None,
+        description="データベースセッションID"
+    )
+    
     @field_validator('current_index')
     @classmethod
     def validate_current_index(cls, v: int, info) -> int:
@@ -411,11 +600,114 @@ class QuizSessionModel(BaseModel):
     def is_completed(self) -> bool:
         """クイズが完了したかどうか"""
         return self.current_index >= self.total_questions
+    
+    def save_to_database(self, database_url: str = None) -> Optional[int]:
+        """
+        セッションをデータベースに保存
+        
+        Args:
+            database_url: データベースURL
+            
+        Returns:
+            int: 保存されたセッションID、失敗時はNone
+        """
+        if not DATABASE_AVAILABLE:
+            return None
+        
+        try:
+            from database.models import DatabaseQuizSession
+            
+            with get_db_session(database_url) as session:
+                # 既存セッションをチェック
+                existing = session.query(DatabaseQuizSession).filter(
+                    DatabaseQuizSession.session_id == self.session_id
+                ).first()
+                
+                if existing:
+                    # 既存セッションを更新
+                    existing.current_index = self.current_index
+                    existing.score = self.score
+                    
+                    if self.is_completed():
+                        existing.status = 'completed'
+                        existing.completed_at = datetime.now()
+                        existing.final_accuracy = self.get_accuracy()
+                        existing.wrong_count = len(self.wrong_questions)
+                    
+                    session.commit()
+                    self.db_session_id = existing.id
+                    return existing.id
+                else:
+                    # 新規作成
+                    db_session = DatabaseQuizSession.create_new_session(
+                        total_questions=self.total_questions,
+                        csv_filename=self.csv_file,
+                        shuffle_questions=self.shuffle_questions,
+                        shuffle_options=self.shuffle_options
+                    )
+                    db_session.session_id = self.session_id
+                    db_session.current_index = self.current_index
+                    db_session.score = self.score
+                    
+                    session.add(db_session)
+                    session.flush()
+                    
+                    saved_id = db_session.id
+                    self.db_session_id = saved_id
+                    
+                    return saved_id
+                
+        except Exception as e:
+            get_logger().error(f"Failed to save session to database: {e}")
+            return None
+    
+    @classmethod
+    def load_from_database(cls, session_id: str, database_url: str = None) -> Optional['QuizSessionModel']:
+        """
+        データベースからセッションを読み込み
+        
+        Args:
+            session_id: セッションID
+            database_url: データベースURL
+            
+        Returns:
+            QuizSessionModel: セッションデータ、見つからない場合はNone
+        """
+        if not DATABASE_AVAILABLE:
+            return None
+        
+        try:
+            from database.models import DatabaseQuizSession
+            
+            with get_db_session(database_url) as session:
+                db_session = session.query(DatabaseQuizSession).filter(
+                    DatabaseQuizSession.session_id == session_id
+                ).first()
+                
+                if not db_session:
+                    return None
+                
+                return cls(
+                    session_id=db_session.session_id,
+                    csv_file=db_session.csv_source_file or "database",
+                    total_questions=db_session.total_questions,
+                    current_index=db_session.current_index,
+                    shuffle_questions=db_session.shuffle_questions,
+                    shuffle_options=db_session.shuffle_options,
+                    score=db_session.score,
+                    answered_questions=[],  # 必要に応じて回答データも読み込み
+                    wrong_questions=[],
+                    db_session_id=db_session.id
+                )
+                
+        except Exception as e:
+            get_logger().error(f"Failed to load session from database: {e}")
+            return None
 
 
 class DataQualityReport(BaseModel):
     """
-    データ品質レポートのモデル
+    データ品質レポートのモデル + DB対応
     CSVファイルの品質をチェックした結果
     """
     model_config = ConfigDict(extra='forbid')
@@ -443,6 +735,13 @@ class DataQualityReport(BaseModel):
     # === 品質スコア ===
     quality_score: float = Field(ge=0.0, le=100.0, description="品質スコア（0-100）")
     
+    # === データベース関連 ===
+    imported_to_database: bool = Field(default=False, description="データベースにインポート済みか")
+    database_import_result: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="データベースインポート結果"
+    )
+    
     def get_success_rate(self) -> float:
         """成功率を取得"""
         if self.total_questions == 0:
@@ -468,3 +767,320 @@ class DataQualityReport(BaseModel):
             self.get_success_rate() >= 95.0 and
             len(self.validation_errors) == 0
         )
+    
+    def set_database_import_result(self, import_result: Dict[str, Any]) -> None:
+        """データベースインポート結果を設定"""
+        self.database_import_result = import_result
+        self.imported_to_database = import_result.get('imported_count', 0) > 0
+    
+    def export_to_database(self, database_url: str = None) -> bool:
+        """
+        品質レポートをデータベースに保存
+        
+        Args:
+            database_url: データベースURL
+            
+        Returns:
+            bool: 保存成功かどうか
+        """
+        if not DATABASE_AVAILABLE:
+            return False
+        
+        try:
+            from database.models import DatabaseStatistics
+            from datetime import datetime
+            
+            with get_db_session(database_url) as session:
+                # 日次統計として保存
+                today = datetime.now().strftime("%Y-%m-%d")
+                
+                # 既存の統計があるかチェック
+                existing = session.query(DatabaseStatistics).filter(
+                    DatabaseStatistics.stat_date == today,
+                    DatabaseStatistics.stat_type == "daily"
+                ).first()
+                
+                if existing:
+                    # 既存統計を更新
+                    existing.total_questions += self.total_questions
+                    existing.total_correct += self.valid_questions
+                    existing.overall_accuracy = (existing.total_correct / existing.total_questions * 100) if existing.total_questions > 0 else 0
+                else:
+                    # 新規作成
+                    db_stats = DatabaseStatistics(
+                        stat_date=today,
+                        stat_type="daily",
+                        total_questions=self.total_questions,
+                        total_correct=self.valid_questions,
+                        overall_accuracy=self.get_success_rate(),
+                        popular_questions={"quality_reports": [self.file_path]}
+                    )
+                    session.add(db_stats)
+                
+                session.commit()
+                get_logger().debug(f"Quality report exported to database for {today}")
+                return True
+                
+        except Exception as e:
+            get_logger().error(f"Failed to export quality report to database: {e}")
+            return False
+
+
+# === データベース連携用のユーティリティ関数 ===
+
+def get_questions_from_database(genre: str = None, difficulty: str = None, 
+                               limit: int = None, database_url: str = None) -> List[QuestionModel]:
+    """
+    データベースから問題を取得してQuestionModelのリストで返す
+    
+    Args:
+        genre: ジャンル絞り込み
+        difficulty: 難易度絞り込み
+        limit: 取得件数制限
+        database_url: データベースURL
+        
+    Returns:
+        List[QuestionModel]: 問題モデルのリスト
+    """
+    if not DATABASE_AVAILABLE:
+        return []
+    
+    try:
+        from database import QuizDatabaseManager
+        
+        db_manager = QuizDatabaseManager(database_url)
+        questions_dict = db_manager.get_questions(
+            genre=genre,
+            difficulty=difficulty,
+            limit=limit
+        )
+        
+        # 辞書からQuestionModelに変換
+        result = []
+        for q_dict in questions_dict:
+            try:
+                # データベース由来のデータはto_legacy_dict()の逆変換が必要
+                question_model = QuestionModel(
+                    question=q_dict['question'],
+                    options=q_dict['options'],
+                    correct_answer=q_dict['correct_answer'],
+                    explanation=q_dict.get('explanation'),
+                    option_explanations=q_dict.get('option_explanations', ['', '', '', '']),
+                    title=q_dict.get('extra_data', {}).get('title'),
+                    genre=q_dict.get('extra_data', {}).get('genre'),
+                    difficulty=q_dict.get('extra_data', {}).get('difficulty'),
+                    tags=q_dict.get('extra_data', {}).get('tags'),
+                    source=q_dict.get('extra_data', {}).get('source'),
+                    extra_data=q_dict.get('extra_data', {}),
+                    db_id=q_dict.get('id')
+                )
+                result.append(question_model)
+            except Exception as e:
+                get_logger().warning(f"Failed to convert question to model: {e}")
+                continue
+        
+        return result
+        
+    except Exception as e:
+        get_logger().error(f"Failed to get questions from database: {e}")
+        return []
+
+
+def save_questions_to_database(questions: List[QuestionModel], 
+                              csv_filename: str = None,
+                              database_url: str = None) -> Dict[str, Any]:
+    """
+    複数の問題をデータベースに一括保存
+    
+    Args:
+        questions: 保存する問題のリスト
+        csv_filename: CSVファイル名
+        database_url: データベースURL
+        
+    Returns:
+        Dict: 保存結果
+    """
+    if not DATABASE_AVAILABLE:
+        return {'error': 'Database not available', 'saved_count': 0}
+    
+    saved_count = 0
+    errors = []
+    
+    for i, question in enumerate(questions):
+        try:
+            question_id = question.save_to_database(database_url, csv_filename)
+            if question_id:
+                saved_count += 1
+            else:
+                errors.append(f"Question {i+1}: Failed to save")
+        except Exception as e:
+            errors.append(f"Question {i+1}: {str(e)}")
+    
+    return {
+        'saved_count': saved_count,
+        'total_questions': len(questions),
+        'errors': errors,
+        'success_rate': (saved_count / len(questions) * 100) if questions else 0
+    }
+
+
+def search_questions_in_database(keyword: str, limit: int = 50, 
+                                database_url: str = None) -> List[QuestionModel]:
+    """
+    データベース内の問題を検索
+    
+    Args:
+        keyword: 検索キーワード
+        limit: 最大取得件数
+        database_url: データベースURL
+        
+    Returns:
+        List[QuestionModel]: 検索結果
+    """
+    if not DATABASE_AVAILABLE:
+        return []
+    
+    try:
+        from database import QuizDatabaseManager
+        
+        db_manager = QuizDatabaseManager(database_url)
+        results = db_manager.search_questions(keyword, limit)
+        
+        # QuestionModelに変換
+        question_models = []
+        for q_dict in results:
+            try:
+                question_model = QuestionModel(
+                    question=q_dict['question'],
+                    options=q_dict['options'],
+                    correct_answer=q_dict['correct_answer'],
+                    explanation=q_dict.get('explanation'),
+                    option_explanations=q_dict.get('option_explanations', ['', '', '', '']),
+                    title=q_dict.get('extra_data', {}).get('title'),
+                    genre=q_dict.get('extra_data', {}).get('genre'),
+                    difficulty=q_dict.get('extra_data', {}).get('difficulty'),
+                    tags=q_dict.get('extra_data', {}).get('tags'),
+                    source=q_dict.get('extra_data', {}).get('source'),
+                    extra_data=q_dict.get('extra_data', {}),
+                    db_id=q_dict.get('id')
+                )
+                question_models.append(question_model)
+            except Exception as e:
+                get_logger().warning(f"Failed to convert search result: {e}")
+                continue
+        
+        return question_models
+        
+    except Exception as e:
+        get_logger().error(f"Failed to search questions in database: {e}")
+        return []
+
+
+def get_database_statistics(database_url: str = None) -> Dict[str, Any]:
+    """
+    データベースの統計情報を取得
+    
+    Args:
+        database_url: データベースURL
+        
+    Returns:
+        Dict: 統計情報
+    """
+    if not DATABASE_AVAILABLE:
+        return {'error': 'Database not available'}
+    
+    try:
+        from database import QuizDatabaseManager
+        
+        db_manager = QuizDatabaseManager(database_url)
+        return db_manager.get_database_info()
+        
+    except Exception as e:
+        get_logger().error(f"Failed to get database statistics: {e}")
+        return {'error': str(e)}
+
+
+# === バリデーション支援関数 ===
+
+def validate_question_data(question_data: Dict[str, Any]) -> tuple[bool, List[str]]:
+    """
+    問題データの妥当性をチェック
+    
+    Args:
+        question_data: チェック対象の問題データ
+        
+    Returns:
+        tuple: (有効かどうか, エラーメッセージリスト)
+    """
+    errors = []
+    
+    try:
+        # QuestionModelで検証
+        QuestionModel.from_csv_dict(question_data)
+        return True, errors
+    except Exception as e:
+        errors.append(str(e))
+        return False, errors
+
+
+def normalize_question_data(question_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    問題データを正規化
+    
+    Args:
+        question_data: 正規化対象の問題データ
+        
+    Returns:
+        Dict: 正規化された問題データ
+    """
+    try:
+        # QuestionModelを経由して正規化
+        question_model = QuestionModel.from_csv_dict(question_data)
+        return question_model.to_legacy_dict()
+    except Exception as e:
+        get_logger().warning(f"Failed to normalize question data: {e}")
+        return question_data
+
+
+# === 型変換支援関数 ===
+
+def convert_legacy_to_model(legacy_dict: Dict[str, Any]) -> QuestionModel:
+    """
+    従来の辞書形式をQuestionModelに変換
+    
+    Args:
+        legacy_dict: 従来形式の問題データ
+        
+    Returns:
+        QuestionModel: 変換された問題モデル
+    """
+    extra_data = legacy_dict.get('extra_data', {})
+    
+    return QuestionModel(
+        question=legacy_dict['question'],
+        options=legacy_dict['options'],
+        correct_answer=legacy_dict['correct_answer'],
+        explanation=legacy_dict.get('explanation'),
+        option_explanations=legacy_dict.get('option_explanations', ['', '', '', '']),
+        title=extra_data.get('title'),
+        genre=extra_data.get('genre'),
+        difficulty=extra_data.get('difficulty'),
+        tags=extra_data.get('tags'),
+        source=extra_data.get('source'),
+        extra_data={k: v for k, v in extra_data.items() 
+                   if k not in ['title', 'genre', 'difficulty', 'tags', 'source']},
+        db_id=legacy_dict.get('id')
+    )
+
+
+def convert_models_to_legacy(models: List[QuestionModel]) -> List[Dict[str, Any]]:
+    """
+    QuestionModelのリストを従来の辞書形式に変換
+    
+    Args:
+        models: QuestionModelのリスト
+        
+    Returns:
+        List[Dict]: 従来形式の問題データリスト
+    """
+    return [model.to_legacy_dict() for model in models]
