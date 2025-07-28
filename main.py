@@ -1,6 +1,18 @@
+# main.py
 """
-クイズアプリケーション メインエントリーポイント
-新アーキテクチャ統合版
+クイズアプリケーション メインエントリーポイント（統合版・検証用）
+
+⚠️ 重要な注意事項 ⚠️
+このファイルは統合版・検証用として保持されています。
+通常の使用では以下の専用アプリケーションをご利用ください：
+
+📱 ユーザー向け（クイズプレイ）:
+   python quiz.py
+
+🛠️ 管理者向け（データ管理）:
+   python admin.py
+
+このファイルの配置場所: プロジェクトルート/main.py
 """
 
 import sys
@@ -14,6 +26,40 @@ from app.core.service_factory import initialize_services, shutdown_services, get
 from desktop.controller import DesktopController
 from desktop.ui.main_window import MainWindow
 from utils.logger import get_logger, set_log_level
+
+
+def show_deprecation_notice():
+    """統合版使用時の注意事項を表示"""
+    print("=" * 60)
+    print("🔔 統合版アプリケーション起動")
+    print("=" * 60)
+    print()
+    print("⚠️ このファイル（main.py）は統合版・検証用です。")
+    print("   通常の使用では以下の専用アプリをご利用ください：")
+    print()
+    print("📱 ユーザー向け（クイズプレイ）:")
+    print("   python quiz.py")
+    print()
+    print("🛠️ 管理者向け（データ管理）:")
+    print("   python admin.py")
+    print()
+    print("💡 このまま統合版を使用する場合は10秒後に開始します...")
+    print("   中断する場合は Ctrl+C を押してください。")
+    print("=" * 60)
+    
+    try:
+        import time
+        for i in range(10, 0, -1):
+            print(f"開始まであと {i} 秒...", end="\r")
+            time.sleep(1)
+        print("                    ", end="\r")  # カウントダウンをクリア
+        print("🚀 統合版アプリケーションを開始します...")
+    except KeyboardInterrupt:
+        print("\n\n👋 統合版の起動を中断しました。")
+        print("推奨アプリをご利用ください：")
+        print("  - ユーザー向け: python quiz.py")
+        print("  - 管理者向け: python admin.py")
+        sys.exit(0)
 
 
 def check_initial_setup() -> tuple[bool, list[str]]:
@@ -112,7 +158,11 @@ def create_main_application() -> tuple[tk.Tk, DesktopController, MainWindow]:
 
 
 def main():
-    """メイン関数"""
+    """メイン関数（統合版・検証用）"""
+    
+    # 統合版使用時の注意事項を表示
+    show_deprecation_notice()
+    
     logger = None
     
     try:
@@ -123,8 +173,9 @@ def main():
         set_log_level(settings.log_level)
         logger = get_logger()
         
-        logger.info("=== クイズアプリケーション起動 ===")
+        logger.info("=== クイズアプリケーション起動（統合版・検証用） ===")
         logger.info(f"デバッグモード: {settings.debug}")
+        logger.info("注意: このファイルは統合版です。通常は quiz.py または admin.py をご利用ください。")
         
         # 初期セットアップチェック
         setup_ok, issues = check_initial_setup()
@@ -150,6 +201,10 @@ def main():
         
         if not app_info.get('has_questions', False):
             logger.warning("問題データがありません - CSVファイルをdataディレクトリに配置してください")
+            print("\n⚠️ 問題データがありません")
+            print("📋 対処方法:")
+            print("   1. admin.py を使用してCSVファイルをインポート")
+            print("   2. または dataディレクトリにCSVファイルを配置して再起動")
         
         # メインウィンドウ表示
         main_window.show_main_menu()
@@ -176,9 +231,11 @@ def main():
     finally:
         # クリーンアップ
         try:
-            logger.info("アプリケーション終了処理開始")
+            if logger:
+                logger.info("アプリケーション終了処理開始")
             shutdown_services()
-            logger.info("アプリケーション終了完了")
+            if logger:
+                logger.info("アプリケーション終了完了")
         except Exception as e:
             print(f"終了処理エラー: {e}")
 
