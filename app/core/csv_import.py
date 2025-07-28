@@ -1,6 +1,7 @@
+# app/core/csv_import.py
 """
-シンプルCSVインポーター
-複雑な機能を削除し、基本的なCSV→データベース変換のみ実装
+CSVインポートサービス - 責任明確化版
+CSV処理に特化し、インターフェースに準拠
 """
 
 import csv
@@ -9,37 +10,27 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# パッケージルートをパスに追加（相対インポートエラー回避）
+# パッケージルートをパスに追加
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# 絶対インポートで修正
 from app.core.models import Question, ImportResult, create_question_from_csv_row, validate_csv_headers
-from app.core.database import DatabaseService
+from app.core.interfaces import CSVImportServiceInterface, QuestionRepositoryInterface
 from app.core.exceptions import CSVImportError, DatabaseError
 from utils.logger import get_logger
 
 
-class CSVImporter:
-    """CSVファイルをデータベースにインポートするクラス"""
+class CSVImportService(CSVImportServiceInterface):
+    """CSVインポートサービス - 責任明確化版"""
     
-    def __init__(self, db_service: DatabaseService):
-        """初期化"""
-        self.db = db_service
+    def __init__(self, question_repository: QuestionRepositoryInterface):
+        """初期化 - 依存性注入"""
+        self.question_repo = question_repository
         self.logger = get_logger()
     
     def import_from_csv(self, csv_file_path: str, overwrite: bool = False) -> Dict[str, Any]:
-        """
-        CSVファイルからデータベースにインポート
-        
-        Args:
-            csv_file_path: CSVファイルのパス
-            overwrite: 既存データを上書きするか
-            
-        Returns:
-            Dict: インポート結果
-        """
+        """CSVファイルからデータベースにインポート"""
         result = ImportResult(success=False)
         
         try:
@@ -59,7 +50,7 @@ class CSVImporter:
             
             # データベースに保存
             if questions:
-                self._save_to_database(questions, csv_file_path, overwrite, result)
+                self._save_to_repository(questions, csv_file_path, overwrite, result)
             
             result.success = result.error_count == 0
             
@@ -156,9 +147,9 @@ class CSVImporter:
         
         return questions
     
-    def _save_to_database(self, questions: List[Question], csv_file_path: str, 
-                         overwrite: bool, result: ImportResult) -> None:
-        """データベースに保存"""
+    def _save_to_repository(self, questions: List[Question], csv_file_path: str, 
+                           overwrite: bool, result: ImportResult) -> None:
+        """リポジトリに保存"""
         csv_filename = os.path.basename(csv_file_path)
         
         try:
@@ -166,13 +157,13 @@ class CSVImporter:
                 try:
                     # 重複チェック（overwriteがFalseの場合）
                     if not overwrite:
-                        existing = self.db.find_question_by_text(question.text, csv_filename)
+                        existing = self.question_repo.find_question_by_text(question.text, csv_filename)
                         if existing:
                             result.skipped_count += 1
                             continue
                     
-                    # データベースに保存
-                    saved_question = self.db.save_question(question, csv_filename)
+                    # リポジトリに保存
+                    saved_question = self.question_repo.save_question(question, csv_filename)
                     
                     if saved_question:
                         result.imported_count += 1
@@ -187,15 +178,7 @@ class CSVImporter:
             raise DatabaseError(f"データベース保存エラー: {str(e)}")
     
     def validate_csv_file(self, csv_file_path: str) -> Dict[str, Any]:
-        """
-        CSVファイルの妥当性をチェック（保存せずに検証のみ）
-        
-        Args:
-            csv_file_path: CSVファイルのパス
-            
-        Returns:
-            Dict: 検証結果
-        """
+        """CSVファイルの妥当性をチェック（保存せずに検証のみ）"""
         result = {
             'is_valid': False,
             'total_rows': 0,
@@ -300,16 +283,7 @@ class CSVImporter:
         return result
     
     def get_csv_preview(self, csv_file_path: str, max_rows: int = 5) -> Dict[str, Any]:
-        """
-        CSVファイルのプレビューを取得
-        
-        Args:
-            csv_file_path: CSVファイルのパス
-            max_rows: 最大表示行数
-            
-        Returns:
-            Dict: プレビュー情報
-        """
+        """CSVファイルのプレビューを取得"""
         preview = {
             'headers': [],
             'sample_rows': [],
@@ -354,16 +328,7 @@ class CSVImporter:
     
     def import_multiple_csv_files(self, csv_directory: str, 
                                  pattern: str = "*.csv") -> Dict[str, Any]:
-        """
-        複数のCSVファイルを一括インポート
-        
-        Args:
-            csv_directory: CSVファイルディレクトリ
-            pattern: ファイル名パターン
-            
-        Returns:
-            Dict: 一括インポート結果
-        """
+        """複数のCSVファイルを一括インポート"""
         overall_result = {
             'success': True,
             'total_files': 0,

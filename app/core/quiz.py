@@ -1,6 +1,7 @@
+# app/core/quiz.py
 """
-クイズサービス
-ビジネスロジックの中核（インポートエラー修正版）
+クイズサービス - 責任明確化版
+ビジネスロジックに特化し、インターフェースに準拠
 """
 
 import random
@@ -9,24 +10,25 @@ import os
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-# パッケージルートをパスに追加（相対インポートエラー回避）
+# パッケージルートをパスに追加
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# 絶対インポートで修正
 from app.core.models import Question, QuizSession, Answer, QuizStatistics
-from app.core.database import DatabaseService
+from app.core.interfaces import QuizServiceInterface, QuestionRepositoryInterface, SessionRepositoryInterface
 from app.core.exceptions import SessionError, QuestionNotFoundError, InvalidAnswerError
 from utils.logger import get_logger
 
 
-class QuizService:
-    """クイズ管理サービス"""
+class QuizService(QuizServiceInterface):
+    """クイズ管理サービス - 責任明確化版"""
     
-    def __init__(self, db_service: DatabaseService):
-        """初期化"""
-        self.db = db_service
+    def __init__(self, question_repository: QuestionRepositoryInterface, 
+                 session_repository: SessionRepositoryInterface):
+        """初期化 - 依存性注入"""
+        self.question_repo = question_repository
+        self.session_repo = session_repository
         self.logger = get_logger()
         self._active_sessions: Dict[str, QuizSession] = {}
     
@@ -35,21 +37,10 @@ class QuizService:
                       category: Optional[str] = None,
                       difficulty: Optional[str] = None,
                       shuffle: bool = True) -> QuizSession:
-        """
-        新しいクイズセッションを作成
-        
-        Args:
-            question_count: 出題する問題数
-            category: カテゴリ絞り込み
-            difficulty: 難易度絞り込み
-            shuffle: 問題をシャッフルするか
-            
-        Returns:
-            作成されたクイズセッション
-        """
+        """新しいクイズセッションを作成"""
         try:
             # 問題を取得
-            questions = self.db.get_questions(
+            questions = self.question_repo.get_questions(
                 category=category,
                 difficulty=difficulty,
                 limit=question_count,
@@ -94,16 +85,7 @@ class QuizService:
         return session.get_current_question()
     
     def answer_question(self, session_id: str, selected_option: int) -> Dict[str, Any]:
-        """
-        問題に回答
-        
-        Args:
-            session_id: セッションID
-            selected_option: 選択した選択肢（0-3）
-            
-        Returns:
-            回答結果の詳細情報
-        """
+        """問題に回答"""
         try:
             session = self.get_session(session_id)
             
@@ -152,7 +134,7 @@ class QuizService:
         """セッション完了時の処理"""
         try:
             # データベースに保存
-            self.db.save_session(session)
+            self.session_repo.save_session(session)
             
             # アクティブセッションから削除
             if session.id in self._active_sessions:
@@ -256,7 +238,7 @@ class QuizService:
                 
                 # 途中終了として記録（オプション）
                 if session.current_index > 0:
-                    self.db.save_session(session)
+                    self.session_repo.save_session(session)
                 
                 del self._active_sessions[session_id]
                 self.logger.info(f"セッション中断: {session_id}")
@@ -266,36 +248,28 @@ class QuizService:
     
     def get_available_categories(self) -> List[str]:
         """利用可能なカテゴリ一覧を取得"""
-        return self.db.get_categories()
+        return self.question_repo.get_categories()
     
     def get_available_difficulties(self) -> List[str]:
         """利用可能な難易度一覧を取得"""
-        return self.db.get_difficulties()
+        return self.question_repo.get_difficulties()
     
     def get_statistics(self) -> QuizStatistics:
         """統計情報を取得"""
-        return self.db.get_statistics()
+        return self.session_repo.get_statistics()
     
     def get_question_count(self, 
                           category: Optional[str] = None,
                           difficulty: Optional[str] = None) -> int:
         """条件に合う問題数を取得"""
         try:
-            return self.db.get_question_count(category, difficulty)
+            return self.question_repo.get_question_count(category, difficulty)
         except Exception as e:
             self.logger.error(f"問題数取得エラー: {e}")
             return 0
     
     def create_retry_session(self, original_session_id: str) -> QuizSession:
-        """
-        間違えた問題のみで再挑戦セッションを作成
-        
-        Args:
-            original_session_id: 元のセッションID
-            
-        Returns:
-            間違えた問題のみのセッション
-        """
+        """間違えた問題のみで再挑戦セッションを作成"""
         try:
             # 元のセッションから間違えた問題を取得
             original_session = self.get_session(original_session_id)
@@ -329,17 +303,8 @@ class QuizService:
             raise SessionError(f"再挑戦セッションの作成に失敗しました: {str(e)}")
     
     def shuffle_options(self, question: Question) -> Question:
-        """
-        問題の選択肢をシャッフル
-        
-        Args:
-            question: 元の問題
-            
-        Returns:
-            選択肢がシャッフルされた新しい問題
-        """
+        """問題の選択肢をシャッフル"""
         try:
-            # 既存のシャッフル関数を使用
             from app.core.models import shuffle_question_options
             return shuffle_question_options(question)
             

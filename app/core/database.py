@@ -1,6 +1,7 @@
 # app/core/database.py
 """
-データベースサービス
+データベースサービス - 責任明確化版
+データアクセス層に特化し、複数のインターフェースを実装
 """
 
 import random
@@ -16,12 +17,20 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from app.core.models import Question, QuizSession, QuizStatistics
+from app.core.interfaces import (
+    QuestionRepositoryInterface,
+    SessionRepositoryInterface,
+    DatabaseServiceInterface
+)
 from app.core.exceptions import DatabaseError, QuestionNotFoundError
 from utils.logger import get_logger
 
 
-class DatabaseService:
-    """データベース操作サービス"""
+class DatabaseService(QuestionRepositoryInterface, SessionRepositoryInterface, DatabaseServiceInterface):
+    """
+    データベース操作サービス - 責任明確化版
+    複数のリポジトリインターフェースを実装
+    """
     
     def __init__(self, database_url: str):
         """初期化"""
@@ -44,6 +53,8 @@ class DatabaseService:
         """データベースセッションを取得"""
         self._ensure_connection()
         return self._db_connection.get_session()
+    
+    # QuestionRepositoryInterface の実装
     
     def get_questions(self, 
                      category: Optional[str] = None,
@@ -221,6 +232,8 @@ class DatabaseService:
             self.logger.error(f"問題数取得エラー: {e}")
             return 0
     
+    # SessionRepositoryInterface の実装
+    
     def save_session(self, session: QuizSession) -> bool:
         """セッションを保存"""
         try:
@@ -336,6 +349,8 @@ class DatabaseService:
             self.logger.error(f"統計取得エラー: {e}")
             return QuizStatistics()
     
+    # DatabaseServiceInterface の実装
+    
     def get_database_info(self) -> Dict[str, Any]:
         """データベース情報を取得"""
         try:
@@ -365,6 +380,39 @@ class DatabaseService:
                 'history_count': 0,
                 'error': str(e)
             }
+    
+    def health_check(self) -> Dict[str, Any]:
+        """データベースヘルスチェック"""
+        try:
+            # 基本接続チェック
+            with self._get_session() as session:
+                session.execute("SELECT 1").scalar()
+            
+            # データベース接続情報取得
+            if self._db_connection:
+                connection_info = self._db_connection.health_check()
+            else:
+                connection_info = {'status': 'no_connection'}
+            
+            # 問題数チェック
+            question_count = self.get_question_count()
+            
+            return {
+                'status': 'healthy',
+                'database_url': self.database_url,
+                'question_count': question_count,
+                'connection_info': connection_info
+            }
+            
+        except Exception as e:
+            self.logger.error(f"データベースヘルスチェック失敗: {e}")
+            return {
+                'status': 'unhealthy',
+                'error': str(e),
+                'database_url': self.database_url
+            }
+    
+    # 追加機能（既存互換性維持）
     
     def search_questions(self, keyword: str, limit: int = 50) -> List[Question]:
         """キーワードで問題を検索"""
@@ -400,3 +448,14 @@ class DatabaseService:
             limit=count,
             shuffle=True
         )
+    
+    def close(self) -> None:
+        """データベース接続を閉じる"""
+        try:
+            if self._db_connection and hasattr(self._db_connection, 'close'):
+                self._db_connection.close()
+                self.logger.info("データベース接続を閉じました")
+        except Exception as e:
+            self.logger.warning(f"データベース接続クローズエラー: {e}")
+        finally:
+            self._db_connection = None
