@@ -1,0 +1,239 @@
+# クイズアプリケーション完全改修計画書
+
+## 全体目標と成功条件
+
+### 最終目標
+ローカル検証用のシンプルなWeb版クイズアプリケーション（FastAPI + React）を構築する
+
+### 成功条件
+1. **オフライン完結**: インターネット接続なしで完全動作する
+2. **シンプル起動**: Docker一発起動でアプリケーションが使える
+3. **機能保持**: 既存デスクトップ版の基本機能を維持する
+4. **軽量化**: ファイル数を60%以上削減する（43ファイル → 17ファイル以下）
+5. **単一ユーザー**: 認証なしで利用可能
+6. **CLI管理**: 問題管理は従来のCLI版admin.pyを継続使用
+
+---
+
+# Phase 1: 不要コード削除
+
+## 目標
+Web化に不要なデスクトップUI、重複ファイル、過度なコメントを削除し、コードベースを40%削減する
+
+## 成功条件
+1. tkinter関連のコードが完全に除去されている
+2. 重複ファイルが存在しない
+3. プロジェクト内ファイル数が30ファイル以下になっている
+4. 残されたファイル間でインポートエラーが発生しない
+5. ビジネスロジック（app/core/）の機能が正常に動作する
+
+## 対象ファイル
+
+### 削除対象ファイル（15ファイル）
+- desktop/controller.py
+- desktop/ui/main_window.py
+- desktop/ui/base.py
+- desktop/ui/quiz_window.py
+- desktop/ui/result_window.py
+- ui/__init__.py
+- ui/base_ui.py
+- ui/start_menu_ui.py
+- ui/quiz_ui.py
+- ui/result_ui.py
+- ui/history_ui.py
+- ui/settings_ui.py
+- ui/ui_manager.py
+- main.py
+- config.py
+
+### 削除対象ファイル（テスト・デバッグ系、8ファイル）
+- test_phase2.py
+- trace_debug.py
+- debug_database.py
+- verify_structure.py
+- data_manager.py
+- logger.py
+- quiz_schema.py
+- sample_quiz.csv
+
+### 修正対象ファイル（6ファイル）
+- quiz.py: tkinter関連削除、API準備用に簡素化
+- admin.py: GUI部分削除、CLI機能のみ保持
+- app/core/models.py: 過度な説明コメント削除
+- app/core/database.py: デバッグ用コメント削除
+- app/core/service_factory.py: 警告・説明コメント簡素化
+- requirements.txt: Web化に不要な依存関係削除
+
+---
+
+# Phase 2: 責任の明確化
+
+## 目標
+Web化に向けた責任の明確化を実施し、FastAPI+React構成に最適化されたアーキテクチャを構築する
+
+## 成功条件
+1. 各層が明確に分離されている（API層、ビジネスロジック層、データアクセス層）
+2. 依存関係が上位層→下位層の一方向のみ
+3. 循環依存が存在しない
+4. ビジネスロジックがAPIに依存しない
+5. 単体テストが容易な構造
+
+## 対象ファイル
+
+### 新規作成ファイル（5ファイル）
+- app/models/__init__.py: APIモデル層の初期化
+- app/models/quiz_models.py: クイズ関連のPydanticモデル
+- app/models/common.py: 共通モデル・バリデーター
+- app/core/interfaces.py: インターフェース定義
+- app/core/dependencies.py: 依存性注入設定
+
+### 修正対象ファイル（8ファイル）
+- app/core/quiz.py: QuizServiceの責任明確化
+- app/core/csv_import.py: CSVImportServiceに名称変更・整理
+- app/core/service_factory.py: 依存性注入パターンに変更
+- app/core/exceptions.py: ビジネス例外の整理
+- app/core/database.py: データアクセス層の責任明確化
+- app/core/models.py: ドメインモデルに特化
+- app/config.py: 設定管理の簡素化
+- utils/logger.py: ログ機能の簡素化
+
+### 移動対象ファイル（4ファイル）
+- database/ → app/database/ に移動
+- database/models.py → app/database/models.py
+- database/connection.py → app/database/connection.py
+- database/__init__.py → app/database/__init__.py
+
+---
+
+# Phase 3: ローカルWeb化実装
+
+## 目標
+ローカル検証用のシンプルなFastAPI+React構成を実装し、オフライン動作する軽量Webアプリを構築する
+
+## 成功条件
+1. Docker一発起動（docker-compose up）でアプリケーションが利用可能
+2. 完全オフライン動作（インターネット接続不要）
+3. デスクトップ版と同等のクイズ機能を提供
+4. 初回読み込み時間2秒以内
+5. CLI版admin.pyでの問題管理が継続利用可能
+6. 認証機能なしで単一ユーザー利用
+7. 全ファイル数17ファイル以下
+
+## 対象ファイル
+
+### バックエンド新規作成（5ファイル）
+- backend/main.py: FastAPIアプリケーション起動
+- backend/app/api/__init__.py: API層初期化
+- backend/app/api/quiz.py: クイズAPIエンドポイント
+- backend/app/api/health.py: ヘルスチェックAPI
+- backend/app/middleware.py: CORS設定
+
+### フロントエンド新規作成（8ファイル）
+- frontend/src/App.tsx: メインアプリケーション
+- frontend/src/pages/HomePage.tsx: ホームページ
+- frontend/src/pages/QuizPage.tsx: クイズ実行ページ
+- frontend/src/pages/ResultPage.tsx: 結果表示ページ
+- frontend/src/pages/HistoryPage.tsx: 履歴・統計ページ
+- frontend/src/services/api.ts: API通信
+- frontend/src/store/quiz.ts: クイズ状態管理
+- frontend/src/types/quiz.ts: TypeScript型定義
+
+### 設定ファイル新規作成（4ファイル）
+- docker-compose.yml: Docker構成
+- Dockerfile.backend: バックエンドコンテナ
+- Dockerfile.frontend: フロントエンドコンテナ
+- README.md: セットアップ手順
+
+### 修正対象ファイル（既存から6ファイル）
+- app/core/quiz.py: Web API対応調整
+- app/core/csv_import.py: Web API対応調整
+- app/core/database.py: Web API対応調整
+- app/core/service_factory.py: Web API対応調整
+- app/models/quiz_models.py: Web API対応調整
+- admin.py: CLI専用として維持
+
+---
+
+# 全Phase完了後の最終構成
+
+## 最終ファイル数: 17ファイル（現在43ファイルから60%削減）
+
+### バックエンド（11ファイル）
+```
+backend/
+├── main.py
+├── app/
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── quiz.py
+│   │   └── health.py
+│   ├── core/
+│   │   ├── quiz.py
+│   │   ├── database.py
+│   │   └── service_factory.py
+│   ├── models/
+│   │   └── quiz_models.py
+│   └── middleware.py
+└── admin.py (CLI版継続)
+```
+
+### フロントエンド（6ファイル）
+```
+frontend/
+├── src/
+│   ├── App.tsx
+│   ├── pages/
+│   │   ├── HomePage.tsx
+│   │   ├── QuizPage.tsx
+│   │   └── HistoryPage.tsx
+│   ├── services/api.ts
+│   └── store/quiz.ts
+```
+
+## 削除されるファイル（26ファイル）
+- デスクトップUI関連: 12ファイル
+- 重複・旧ファイル: 8ファイル  
+- テスト・デバッグファイル: 6ファイル
+
+## 機能の変更
+### 削除される機能
+- デスクトップGUI
+- 複数ユーザー対応
+- 認証・認可
+- リアルタイム機能
+- Web版管理画面
+
+### 継続される機能
+- クイズ実行
+- 履歴・統計表示
+- CLI版問題管理
+- CSV問題インポート
+- オフライン動作
+
+## 技術スタック
+### バックエンド
+- FastAPI
+- SQLAlchemy
+- SQLite
+- Python 3.11+
+
+### フロントエンド  
+- React 18
+- TypeScript
+- Vite
+- Tailwind CSS
+
+### インフラ
+- Docker + Docker Compose
+- オフライン動作
+
+## 実施期間
+- Phase 1: 1週間（削除作業）
+- Phase 2: 1週間（責任明確化）  
+- Phase 3: 2週間（Web化実装）
+- 合計: 4週間
+
+## リスク管理
+1. **機能喪失**: 削除により重要な機能が失われるリスク → 段階的削除で対策
+2. **依存関係**: 削除ファイルへの依存が残存するリスク → 事前調査で対策
+3. **複雑性**: Web化により複雑になるリスク → シンプル設計で対策

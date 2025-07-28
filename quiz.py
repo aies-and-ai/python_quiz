@@ -1,19 +1,16 @@
 # quiz.py
 """
 クイズプレイ専用アプリケーション（ユーザー向け）
-Web化時は user_app/ に移行予定
+Phase 1: デスクトップUI削除、API準備用に簡素化
 
 このファイルの配置場所: プロジェクトルート/quiz.py
 """
 
 import sys
-import tkinter as tk
 from pathlib import Path
 
 from app.config import get_settings
 from app.core.service_factory import initialize_services, shutdown_services, get_quiz_service
-from desktop.controller import DesktopController
-from desktop.ui.main_window import MainWindow
 from utils.logger import get_logger, set_log_level
 
 
@@ -37,123 +34,114 @@ def check_quiz_readiness() -> tuple[bool, str]:
         return False, f"システムエラー: {str(e)}"
 
 
-def create_user_application() -> tuple[tk.Tk, DesktopController, MainWindow]:
-    """
-    ユーザー向けアプリケーションを作成
-    
-    Returns:
-        tuple: (root, controller, main_window)
-    """
-    logger = get_logger()
-    
-    # tkinterルートウィンドウ作成
-    root = tk.Tk()
-    
-    # コントローラー作成（ユーザー機能のみ）
-    controller = DesktopController()
-    
-    # メインウィンドウ作成
-    main_window = MainWindow(root, controller)
-    
-    # ユーザー向けUIコールバックのみ設定
-    controller.set_ui_callbacks({
-        'show_question': main_window.show_question,
-        'show_answer_result': main_window.show_answer_result,
-        'show_results': main_window.show_results,
-        'show_statistics': main_window.show_statistics,
-        'show_settings': main_window.show_settings,
-        'show_main_menu': main_window.show_main_menu,
-        'show_error': main_window.show_error,
-        'show_info': main_window.show_info
-    })
-    
-    logger.info("ユーザー向けアプリケーション作成完了")
-    
-    return root, controller, main_window
+def run_simple_cli_quiz():
+    """簡易CLI版クイズ実行（Web化準備用）"""
+    try:
+        quiz_service = get_quiz_service()
+        
+        # セッション作成
+        session = quiz_service.create_session(question_count=5)
+        print(f"\n=== クイズ開始 ({session.total_questions}問) ===")
+        
+        # 問題実行
+        while not session.is_completed:
+            question = quiz_service.get_current_question(session.id)
+            if not question:
+                break
+                
+            # 問題表示
+            progress = quiz_service.get_session_progress(session.id)
+            print(f"\n問題 {progress['current_index'] + 1}/{progress['total_questions']}")
+            print(f"スコア: {progress['score']}")
+            print(f"\n{question.text}")
+            
+            # 選択肢表示
+            for i, option in enumerate(question.options):
+                print(f"{i+1}. {option}")
+            
+            # 回答入力
+            try:
+                answer = int(input("\n回答を選択してください (1-4): ")) - 1
+                if not 0 <= answer <= 3:
+                    print("1-4の範囲で入力してください")
+                    continue
+                    
+                # 回答処理
+                result = quiz_service.answer_question(session.id, answer)
+                
+                if result['is_correct']:
+                    print("✅ 正解！")
+                else:
+                    print("❌ 不正解")
+                    correct_option = question.options[result['correct_answer']]
+                    print(f"正解: {correct_option}")
+                
+                if result['explanation']:
+                    print(f"解説: {result['explanation']}")
+                    
+            except (ValueError, KeyboardInterrupt):
+                print("\nクイズを中断しました")
+                return
+        
+        # 結果表示
+        if session.is_completed:
+            results = quiz_service.get_session_results(session.id)
+            print(f"\n=== 結果 ===")
+            print(f"スコア: {results['score']}/{results['total_questions']}")
+            print(f"正答率: {results['accuracy']:.1f}%")
+            
+    except Exception as e:
+        print(f"クイズ実行エラー: {e}")
 
 
 def main():
-    """ユーザー向けメイン関数"""
+    """ユーザー向けメイン関数（簡素化版）"""
     logger = None
     
     try:
         # 設定読み込み
         settings = get_settings()
-        
-        # ログレベル設定
         set_log_level(settings.log_level)
         logger = get_logger()
         
-        logger.info("=== クイズアプリケーション起動（ユーザー版） ===")
-        logger.info(f"デバッグモード: {settings.debug}")
+        logger.info("=== クイズアプリケーション起動（簡素版） ===")
         
         # サービス初期化
-        logger.info("サービス初期化中...")
         initialize_services(settings.database_url)
-        logger.info("サービス初期化完了")
         
         # クイズ実行可能性チェック
         is_ready, message = check_quiz_readiness()
-        logger.info(f"準備状況: {message}")
+        print(f"\n{message}")
         
         if not is_ready:
-            print(f"\n❌ エラー: {message}")
             print("\n📋 解決方法:")
             print("   1. 管理者用アプリを起動: python admin.py")
             print("   2. CSVファイルをインポートしてください")
-            print("   3. その後、再度このアプリを起動してください")
-            print("\n💡 管理者用アプリの使用方法:")
-            print("   - GUI版: python admin.py")
-            print("   - CLI版: python admin.py --import your_file.csv")
-            
-            input("\nEnterキーを押して終了...")
             return
         
-        # ユーザーアプリケーション作成
-        logger.info("ユーザーUIアプリケーション作成中...")
-        root, controller, main_window = create_user_application()
-        
-        # アプリケーション情報表示
-        app_info = controller.get_app_info()
-        logger.info(f"利用可能問題数: {app_info.get('question_count', 0)}問")
-        
-        # メインウィンドウ表示
-        main_window.show_main_menu()
-        
-        logger.info("ユーザーアプリケーション開始 - メインループ実行")
-        
-        # メインループ開始
-        root.mainloop()
+        # 簡易CLI版クイズ実行
+        print("\n💡 この簡易版は開発用です。Web版準備中...")
+        if input("簡易版クイズを実行しますか？ (y/N): ").lower() == 'y':
+            run_simple_cli_quiz()
         
     except KeyboardInterrupt:
-        logger.info("ユーザーによる中断")
+        print("\n\nユーザーによる中断")
     except Exception as e:
         if logger:
-            logger.error(f"ユーザーアプリケーションエラー: {e}")
+            logger.error(f"アプリケーションエラー: {e}")
         else:
             print(f"起動エラー: {e}")
         
-        if settings and settings.debug:
-            import traceback
-            traceback.print_exc()
-        
-        print(f"\n❌ アプリケーションエラーが発生しました: {e}")
+        print(f"\n❌ エラーが発生しました: {e}")
         print("\n📋 トラブルシューティング:")
-        print("   1. データベースファイルが破損している可能性があります")
-        print("   2. quiz.db を削除して再度お試しください")
-        print("   3. 問題が続く場合は管理者にお問い合わせください")
-        
-        input("\nEnterキーを押して終了...")
-        sys.exit(1)
+        print("   1. admin.py を使用して問題データを確認してください")
+        print("   2. データベースファイル(quiz.db)を確認してください")
     
     finally:
-        # クリーンアップ
         try:
             if logger:
-                logger.info("ユーザーアプリケーション終了処理開始")
+                logger.info("アプリケーション終了処理")
             shutdown_services()
-            if logger:
-                logger.info("ユーザーアプリケーション終了完了")
         except Exception as e:
             print(f"終了処理エラー: {e}")
 

@@ -1,6 +1,7 @@
+# app/core/models.py
 """
-シンプルなdataclassモデル
-pydanticの複雑な機能を削除し、基本的なデータクラスのみ使用
+データクラスモデル
+基本的なデータクラスのみ使用
 """
 
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ class Question:
     id: int
     text: str
     options: List[str]
-    correct_answer: int  # 0-3のインデックス
+    correct_answer: int
     explanation: Optional[str] = None
     category: Optional[str] = None
     difficulty: Optional[str] = None
@@ -46,7 +47,7 @@ class Question:
         )
     
     def to_dict(self) -> Dict[str, Any]:
-        """辞書形式に変換（UI用）"""
+        """辞書形式に変換"""
         return {
             'id': self.id,
             'text': self.text,
@@ -145,7 +146,6 @@ class QuizSession:
         
         self.answers.append(answer)
         
-        # セッション完了チェック
         if self.is_completed:
             self.completed_at = datetime.now()
         
@@ -157,7 +157,6 @@ class QuizSession:
         
         for answer in self.answers:
             if not answer.is_correct:
-                # 対応する問題を検索
                 question = None
                 for q in self.questions:
                     if q.id == answer.question_id:
@@ -219,11 +218,9 @@ class QuizStatistics:
         self.total_questions_answered += session.total_questions
         self.total_correct_answers += session.score
         
-        # ベストスコア更新
         if session.score > self.best_score:
             self.best_score = session.score
         
-        # ベスト正答率更新
         if session.accuracy > self.best_accuracy:
             self.best_accuracy = session.accuracy
     
@@ -275,12 +272,10 @@ class ImportResult:
 def create_question_from_csv_row(row: Dict[str, str], question_id: int) -> Question:
     """CSV行から問題を作成"""
     try:
-        # 基本フィールド
         text = row.get('question', '').strip()
         if not text:
             raise ValueError("問題文が空です")
         
-        # 選択肢
         options = []
         for i in range(1, 5):
             option = row.get(f'option{i}', '').strip()
@@ -288,7 +283,6 @@ def create_question_from_csv_row(row: Dict[str, str], question_id: int) -> Quest
                 raise ValueError(f"選択肢{i}が空です")
             options.append(option)
         
-        # 正解番号（1-4 → 0-3に変換）
         correct_str = row.get('correct_answer', '').strip()
         if not correct_str:
             raise ValueError("正解番号が設定されていません")
@@ -300,7 +294,6 @@ def create_question_from_csv_row(row: Dict[str, str], question_id: int) -> Quest
         except ValueError:
             raise ValueError(f"正解番号が無効です: {correct_str}")
         
-        # オプションフィールド
         explanation = row.get('explanation', '').strip() or None
         category = row.get('genre', '').strip() or row.get('category', '').strip() or None
         difficulty = row.get('difficulty', '').strip() or None
@@ -335,23 +328,17 @@ def shuffle_question_options(question: Question) -> Question:
     """問題の選択肢をシャッフル"""
     import random
     
-    # 選択肢とインデックスのペア
     options_with_indices = list(enumerate(question.options))
-    
-    # シャッフル
     random.shuffle(options_with_indices)
     
-    # 新しい選択肢リストと正解インデックス
     new_options = [option for _, option in options_with_indices]
     
-    # 正解の新しいインデックスを見つける
     new_correct_answer = 0
     for new_idx, (old_idx, _) in enumerate(options_with_indices):
         if old_idx == question.correct_answer:
             new_correct_answer = new_idx
             break
     
-    # 新しい問題オブジェクトを作成
     return Question(
         id=question.id,
         text=question.text,

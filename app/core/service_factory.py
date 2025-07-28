@@ -1,6 +1,7 @@
+# app/core/service_factory.py
 """
 サービスファクトリー
-依存性注入とサービスインスタンス管理（修正版）
+依存性注入とサービスインスタンス管理
 """
 
 import sys
@@ -8,12 +9,10 @@ import os
 from typing import Optional
 from pathlib import Path
 
-# パッケージルートをPythonパスに追加（インポートエラー回避）
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# 絶対インポートで修正
 from app.core.database import DatabaseService
 from app.core.quiz import QuizService  
 from app.core.csv_import import CSVImporter
@@ -33,7 +32,6 @@ class ServiceFactory:
         return cls._instance
     
     def __init__(self):
-        # 遅延インポート（循環インポート回避）
         try:
             from utils.logger import get_logger
             self.logger = get_logger()
@@ -49,23 +47,16 @@ class ServiceFactory:
             return
         
         try:
-            # 設定取得（遅延インポート）
             try:
                 from app.config import get_settings
                 settings = get_settings()
                 db_url = database_url or settings.database_url
             except ImportError:
-                # 設定が取得できない場合はデフォルト値を使用
                 db_url = database_url or "sqlite:///quiz.db"
                 self.logger.warning("設定ファイルが見つかりません。デフォルト設定を使用します。")
             
-            # データベースサービス初期化
             self._db_service = DatabaseService(db_url)
-            
-            # クイズサービス初期化
             self._quiz_service = QuizService(self._db_service)
-            
-            # CSVインポーター初期化
             self._csv_importer = CSVImporter(self._db_service)
             
             self._initialized = True
@@ -96,9 +87,7 @@ class ServiceFactory:
     def shutdown(self) -> None:
         """リソースのクリーンアップ"""
         if self._quiz_service:
-            # アクティブセッションを保存
             try:
-                # QuizServiceに_active_sessionsがある場合のみ処理
                 if hasattr(self._quiz_service, '_active_sessions'):
                     for session_id in list(self._quiz_service._active_sessions.keys()):
                         try:
@@ -115,7 +104,7 @@ class ServiceFactory:
         return self._initialized
     
     def reset(self) -> None:
-        """ファクトリーをリセット（テスト用）"""
+        """ファクトリーをリセット"""
         self.shutdown()
         self._db_service = None
         self._quiz_service = None
@@ -136,27 +125,27 @@ def get_service_factory() -> ServiceFactory:
 
 
 def get_quiz_service() -> QuizService:
-    """クイズサービスを取得（便利関数）"""
+    """クイズサービスを取得"""
     return get_service_factory().get_quiz_service()
 
 
 def get_database_service() -> DatabaseService:
-    """データベースサービスを取得（便利関数）"""
+    """データベースサービスを取得"""
     return get_service_factory().get_database_service()
 
 
 def get_csv_importer() -> CSVImporter:
-    """CSVインポーターを取得（便利関数）"""
+    """CSVインポーターを取得"""
     return get_service_factory().get_csv_importer()
 
 
 def initialize_services(database_url: Optional[str] = None) -> None:
-    """サービスを初期化（便利関数）"""
+    """サービスを初期化"""
     get_service_factory().initialize(database_url)
 
 
 def shutdown_services() -> None:
-    """サービスをシャットダウン（便利関数）"""
+    """サービスをシャットダウン"""
     global _factory
     if _factory:
         _factory.shutdown()
@@ -164,7 +153,7 @@ def shutdown_services() -> None:
 
 
 def reset_services() -> None:
-    """サービスをリセット（テスト用）"""
+    """サービスをリセット"""
     global _factory
     if _factory:
         _factory.reset()
@@ -177,9 +166,8 @@ def is_services_initialized() -> bool:
     return _factory is not None and _factory.is_initialized()
 
 
-# デバッグ用関数
 def get_services_status() -> dict:
-    """サービスの状態を取得（デバッグ用）"""
+    """サービスの状態を取得"""
     global _factory
     
     if _factory is None:

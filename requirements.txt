@@ -1,18 +1,15 @@
-# クイズアプリケーション依存関係 (簡素化版)
+# クイズアプリケーション依存関係（Web化準備版）
 
 # データベース
 sqlalchemy==2.0.23
 
-# 注意: 以下は削除
-# pydantic==2.5.0              # 段階的導入のため一旦削除
-# pydantic-settings==2.1.0     # 設定管理を簡素化
-# python-dotenv==1.0.0         # .env対応は一旦削除
-
-# tkinter は Python 標準ライブラリに含まれるため不要
-# json, csv, logging, os, pathlib も標準ライブラリのため不要
-# uuid, datetime も標準ライブラリのため不要
-
-# 将来追加予定 (Web化時):
+# Web化準備（Phase 3で使用）
 # fastapi==0.104.1
-# uvicorn==0.24.0  
-# pydantic==2.5.0
+# uvicorn==0.24.0
+
+# 注意: 以下は削除済み
+# tkinter は Python 標準ライブラリに含まれるため不要
+# json, csv, logging, os, pathlib, uuid, datetime も標準ライブラリのため不要
+# pydantic==2.5.0              # 複雑な機能削除のため一時削除
+# pydantic-settings==2.1.0     # 設定管理を簡素化のため削除
+# python-dotenv==1.0.0         # .env対応は一旦削除
