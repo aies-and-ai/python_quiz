@@ -1,0 +1,11 @@
+{
+  "database_url": "sqlite:///quiz.db",
+  "window_width": 800,
+  "window_height": 600,
+  "window_title": "4択クイズアプリ",
+  "shuffle_questions": true,
+  "shuffle_options": true,
+  "default_question_count": 10,
+  "debug": false,
+  "log_level": "INFO"
+}

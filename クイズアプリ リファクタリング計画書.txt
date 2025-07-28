@@ -1,0 +1,232 @@
+# クイズアプリ リファクタリング計画書
+
+## 基本方針
+- **シンプル・イズ・ベスト**
+- **SQLite一本化**（CSVは初期インポートのみ）
+- **最小限の依存関係**（SQLAlchemyのみ）
+- **段階的pydantic導入**（最初はdataclass）
+- **テスト可能な設計**（依存性注入）
+
+## Phase 1: 大掃除（1日）
+
+### 1.1 不要ファイル・コメントの削除
+削除対象ファイル:
+- quiz_ui.py (ui/配下に統合)
+- exceptions.py (enhanced_exceptions.pyに統合)
+- test_week4_data_validation.py
+- enhanced_exceptions.py (簡素化した例外に置き換え)
+
+作業内容:
+- Week X系コメント全削除
+- pydantic複雑機能の削除準備
+
+### 1.2 requirements.txtの簡素化
+新requirements.txt:
+```
+sqlalchemy==2.0.23
+# 以上！（tkinterは標準ライブラリ）
+```
+
+## Phase 2: 新構造の構築（2-3日）
+
+### 2.1 新ディレクトリ構造作成
+```
+quiz_app/
+├── app/
+│   ├── __init__.py
+│   ├── config.py               # シンプル設定
+│   ├── core/                   # ビジネスロジック
+│   │   ├── __init__.py
+│   │   ├── models.py           # dataclass モデル
+│   │   ├── database.py         # DB操作統合
+│   │   ├── quiz.py             # QuizService
+│   │   ├── csv_import.py       # CSV→SQLite変換
+│   │   └── exceptions.py       # シンプル例外
+│   └── schemas/                # 将来のAPI用（空）
+│       └── __init__.py
+├── desktop/                    # デスクトップアプリ
+│   ├── __init__.py
+│   ├── main.py                 # エントリーポイント
+│   ├── controller.py           # UIコントローラー
+│   └── ui/
+│       ├── __init__.py
+│       ├── base.py
+│       ├── main_window.py
+│       ├── quiz_window.py
+│       └── result_window.py
+├── utils/
+│   ├── __init__.py
+│   └── logger.py               # シンプルログ
+├── tests/                      # テスト用
+│   └── __init__.py
+├── data/                       # データファイル
+│   └── sample_quiz.csv
+├── main.py                     # デスクトップ版起動
+└── requirements.txt
+```
+
+### 2.2 基本設定クラス作成
+作成ファイル: app/config.py
+機能:
+- dataclassベースのシンプル設定
+- JSON設定ファイル対応
+- デフォルト値提供
+
+## Phase 3: データ層の構築（3-4日）
+
+### 3.1 シンプルデータモデル作成
+作成ファイル: app/core/models.py
+含む内容:
+- Question (dataclass)
+- QuizSession (dataclass)
+- Answer (dataclass)
+- 基本バリデーション
+
+### 3.2 データベースサービス作成
+作成ファイル: app/core/database.py
+含む内容:
+- SQLAlchemyテーブル定義
+- DatabaseService クラス
+- CRUD操作
+- モデル変換機能
+
+### 3.3 CSVインポート機能作成
+作成ファイル: app/core/csv_import.py
+機能:
+- CSV → SQLite一方向変換
+- エラーハンドリング
+- インポート統計
+
+## Phase 4: ビジネスロジック層（2-3日）
+
+### 4.1 QuizService作成
+作成ファイル: app/core/quiz.py
+含む機能:
+- セッション作成
+- 問題回答処理
+- 進行状況管理
+- 結果計算
+
+### 4.2 例外クラス作成
+作成ファイル: app/core/exceptions.py
+含む内容:
+- QuizError (基底例外)
+- SessionError
+- QuestionNotFoundError
+- その他必要な例外
+
+## Phase 5: デスクトップUI層（3-4日）
+
+### 5.1 コントローラー作成
+作成ファイル: desktop/controller.py
+機能:
+- QuizServiceとの連携
+- UI状態管理
+- エラーハンドリング
+
+### 5.2 シンプルUI作成
+作成ファイル:
+- desktop/ui/main_window.py (メイン画面)
+- desktop/ui/quiz_window.py (クイズ画面)
+- desktop/ui/result_window.py (結果画面)
+- desktop/ui/base.py (共通UI機能)
+
+機能:
+- tkinterベースのシンプルUI
+- 画面遷移管理
+- エラー表示
+
+### 5.3 ログ機能作成
+作成ファイル: utils/logger.py
+機能:
+- シンプルなログ出力
+- 最小限の設定
+
+## Phase 6: 統合・テスト（2-3日）
+
+### 6.1 基本テスト作成
+作成ファイル: tests/test_quiz_service.py
+テスト内容:
+- QuizServiceの基本機能
+- モックを使用した単体テスト
+- エッジケースのテスト
+
+### 6.2 統合テスト・メイン関数作成
+更新ファイル: main.py
+機能:
+- 初回起動時のCSVインポート
+- 設定読み込み
+- アプリケーション起動
+- エラーハンドリング
+
+### 6.3 動作確認・修正
+作業内容:
+- 全体の動作確認
+- バグ修正
+- パフォーマンステスト
+- ドキュメント更新
+
+## 実装スケジュール（12日間）
+
+### Week 1:
+- **Day 1**: Phase 1 (大掃除)
+- **Day 2-3**: Phase 2 (新構造)
+- **Day 4-6**: Phase 3 (データ層)
+- **Day 7**: Phase 4 開始
+
+### Week 2:
+- **Day 8-9**: Phase 4 完了 (ビジネスロジック)
+- **Day 10-11**: Phase 5 (UI層)
+- **Day 12**: Phase 6 (統合・テスト)
+
+## 成功指標
+
+### 量的指標:
+1. **ファイル数**: 30+ → 15以下
+2. **依存関係**: 5+ → 1個（SQLAlchemy）
+3. **コード行数**: 3000+ → 1000行以下
+4. **起動時間**: CSV読み込み不要により高速化
+5. **テストカバレッジ**: 主要機能70%以上
+
+### 質的指標:
+1. **保守性**: シンプルな構造で理解しやすい
+2. **拡張性**: Web化への準備が整っている
+3. **安定性**: SQLite一本化により動作が安定
+4. **テスト性**: 依存性注入によりテストが容易
+
+## 注意事項
+
+### 移行時の注意点:
+- 既存のクイズデータ（JSON）は初回起動時にSQLiteに移行
+- 設定ファイルの形式変更（.env → config.json）
+- UI操作は基本的に変更なし
+
+### リスク管理:
+- 各Phaseで動作確認を実施
+- 問題があれば前のPhaseに戻る
+- 重要な機能は優先的に実装
+
+### 将来への準備:
+- FastAPI標準ディレクトリ構造
+- pydantic導入の準備
+- API化のための設計
+
+## 完了後の状態
+
+### 技術的改善:
+- シンプルで理解しやすいコード
+- 高速な起動時間
+- 安定したデータ管理
+- テスト可能な設計
+
+### 機能的改善:
+- 既存機能は全て維持
+- より安定した動作
+- 設定管理の簡素化
+- エラーハンドリングの改善
+
+### Web化への準備:
+- FastAPI標準構造
+- ビジネスロジックの分離
+- データベース一本化
+- API化の基盤完成

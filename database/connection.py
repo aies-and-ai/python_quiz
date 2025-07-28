@@ -1,7 +1,6 @@
 # database/connection.py
 """
-SQLite データベース接続管理
-セッション管理、初期化、ヘルスチェック機能
+SQLite データベース接続管理（循環呼び出し修正版）
 """
 
 import os
@@ -12,12 +11,16 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError, IntegrityError
-from logger import get_logger
-from enhanced_exceptions import ConfigurationError
+from utils.logger import get_logger
+
+
+class DatabaseConnectionError(Exception):
+    """データベース接続エラー"""
+    pass
 
 
 class DatabaseConnection:
-    """SQLiteデータベース接続管理クラス"""
+    """SQLiteデータベース接続管理クラス（循環呼び出し修正版）"""
     
     def __init__(self, database_url: Optional[str] = None, database_path: Optional[str] = None):
         """
@@ -49,9 +52,16 @@ class DatabaseConnection:
         
         # 接続状態
         self._is_initialized = False
+        self._is_initializing = False  # 初期化中フラグを追加
         
     def initialize(self) -> None:
         """データベース接続を初期化"""
+        # 既に初期化済みまたは初期化中の場合はスキップ
+        if self._is_initialized or self._is_initializing:
+            return
+        
+        self._is_initializing = True  # 初期化開始
+        
         try:
             # SQLiteファイルのディレクトリを作成
             self._ensure_database_directory()
@@ -83,19 +93,17 @@ class DatabaseConnection:
             # データベーステーブル作成
             self._create_tables()
             
-            # 接続テスト
-            self._test_connection()
+            # 接続テスト（循環呼び出しを回避）
+            self._test_connection_direct()
             
             self._is_initialized = True
             self.logger.info("Database connection initialized successfully")
             
         except Exception as e:
             self.logger.error(f"Failed to initialize database: {e}")
-            raise ConfigurationError(
-                message=f"Database initialization failed: {str(e)}",
-                original_error=e,
-                user_message="データベースの初期化に失敗しました。ファイルの権限を確認してください。"
-            )
+            raise DatabaseConnectionError(f"データベースの初期化に失敗しました: {str(e)}")
+        finally:
+            self._is_initializing = False  # 初期化完了
     
     def _ensure_database_directory(self) -> None:
         """データベースファイルのディレクトリを確保"""
@@ -140,14 +148,19 @@ class DatabaseConnection:
             self.logger.error(f"Failed to create tables: {e}")
             raise
     
-    def _test_connection(self) -> None:
-        """データベース接続をテスト"""
+    def _test_connection_direct(self) -> None:
+        """データベース接続をテスト（直接セッション作成で循環回避）"""
         try:
-            with self.get_session() as session:
+            # get_session()を使わずに直接セッションを作成
+            session = self.SessionLocal()
+            try:
                 # 簡単なクエリで接続確認
                 result = session.execute(text("SELECT 1")).scalar()
                 if result != 1:
                     raise OperationalError("Connection test failed", None, None)
+                session.commit()
+            finally:
+                session.close()
                 
             self.logger.debug("Database connection test passed")
             
@@ -302,6 +315,7 @@ class DatabaseConnection:
             self.logger.info("Database connection closed")
         
         self._is_initialized = False
+        self._is_initializing = False
 
 
 # グローバルデータベース接続インスタンス
@@ -321,6 +335,11 @@ def get_database_connection(database_url: Optional[str] = None) -> DatabaseConne
     global _db_connection
     
     if _db_connection is None:
+        _db_connection = DatabaseConnection(database_url=database_url)
+        _db_connection.initialize()
+    elif database_url and _db_connection.database_url != database_url:
+        # URLが異なる場合は再初期化
+        _db_connection.close()
         _db_connection = DatabaseConnection(database_url=database_url)
         _db_connection.initialize()
     
