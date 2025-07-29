@@ -1,0 +1,162 @@
+# Dockerfile.frontend
+# ローカル検証用クイズアプリケーション フロントエンド
+# React + TypeScript構成
+
+# マルチステージビルド：ベースイメージ
+FROM node:18-alpine as base
+
+# メタデータ
+LABEL maintainer="Quiz App Team"
+LABEL description="Quiz Application Frontend - React + TypeScript"
+LABEL version="1.0.0"
+
+# 作業ディレクトリ設定
+WORKDIR /app
+
+# システム依存関係（Alpine Linux用）
+RUN apk add --no-cache curl
+
+# 開発ステージ
+FROM base as development
+
+# package.jsonとpackage-lock.jsonをコピー
+COPY frontend/package*.json ./
+
+# 開発用依存関係をインストール
+RUN npm ci
+
+# ソースコードをコピー
+COPY frontend/ .
+
+# 開発用ポート公開
+EXPOSE 3000
+
+# 開発サーバー起動
+CMD ["npm", "start"]
+
+# ビルドステージ
+FROM base as build
+
+# package.jsonとpackage-lock.jsonをコピー
+COPY frontend/package*.json ./
+
+# 本番用依存関係のみインストール
+RUN npm ci --only=production && npm cache clean --force
+
+# ソースコードをコピー
+COPY frontend/ .
+
+# 環境変数設定（ビルド時）
+ENV NODE_ENV=production
+ENV GENERATE_SOURCEMAP=false
+ENV REACT_APP_API_URL=http://localhost:8000/api/v1
+
+# Reactアプリケーションをビルド
+RUN npm run build
+
+# 本番ステージ（Nginx使用）
+FROM nginx:alpine as production
+
+# Nginxの設定をカスタマイズ
+COPY <<EOF /etc/nginx/conf.d/default.conf
+server {
+    listen 3000;
+    server_name localhost;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Gzip圧縮を有効化
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        application/javascript
+        application/xml+rss
+        application/json;
+
+    # セキュリティヘッダー
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # React Router対応（SPA）
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+
+    # API プロキシ（開発用）
+    location /api/ {
+        proxy_pass http://backend:8000/api/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # 静的ファイルのキャッシュ設定
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # ヘルスチェック
+    location /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+
+# ビルド済みファイルをコピー
+COPY --from=build /app/build /usr/share/nginx/html
+
+# 非rootユーザーの作成
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S nextjs -u 1001
+
+# ポート公開
+EXPOSE 3000
+
+# ヘルスチェック設定
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Nginx起動
+CMD ["nginx", "-g", "daemon off;"]
+
+# 軽量版（serve使用）
+FROM node:18-alpine as lightweight
+
+# 軽量Webサーバー（serve）をインストール
+RUN npm install -g serve
+
+# 作業ディレクトリ設定
+WORKDIR /app
+
+# ビルド済みファイルをコピー
+COPY --from=build /app/build ./build
+
+# 非rootユーザーの作成
+RUN addgroup -g 1001 -S nodejs \
+    && adduser -S nextjs -u 1001 \
+    && chown -R nextjs:nodejs /app
+
+USER nextjs
+
+# ポート公開
+EXPOSE 3000
+
+# ヘルスチェック設定
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:3000 || exit 1
+
+# Webサーバー起動
+CMD ["serve", "-s", "build", "-l", "3000"]
+
+# デフォルトターゲット
+FROM production as default

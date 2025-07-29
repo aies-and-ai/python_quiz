@@ -1,0 +1,83 @@
+# docker-compose.yml
+# ローカル検証用クイズアプリケーション Docker構成
+# 完全オフライン動作・シンプル構成
+
+version: '3.8'
+
+services:
+  # バックエンド（FastAPI）
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: quiz_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # データベース永続化
+      - quiz_data:/app/data
+      # 問題データ（CSV）の共有
+      - ./csv_data:/app/csv_data:ro
+      # ログ出力
+      - ./logs:/app/logs
+    environment:
+      # アプリケーション設定
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - API_DEBUG=false
+      - DATABASE_URL=sqlite:///data/quiz.db
+      - LOG_LEVEL=INFO
+      - LOG_TO_FILE=true
+      - LOG_FILE_PATH=/app/logs/quiz_app.log
+      
+      # FastAPI設定
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000
+      
+    networks:
+      - quiz_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # フロントエンド（React）
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: quiz_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # React設定
+      - REACT_APP_API_URL=http://localhost:8000/api/v1
+      - NODE_ENV=production
+      - GENERATE_SOURCEMAP=false
+    networks:
+      - quiz_network
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# ネットワーク設定
+networks:
+  quiz_network:
+    driver: bridge
+    name: quiz_network
+
+# ボリューム設定
+volumes:
+  # データベースファイルの永続化
+  quiz_data:
+    driver: local
+    name: quiz_data

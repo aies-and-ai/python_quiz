@@ -1,0 +1,74 @@
+# Dockerfile.backend
+# ローカル検証用クイズアプリケーション バックエンド
+# FastAPI + SQLite構成
+
+# マルチステージビルド：ベースイメージ
+FROM python:3.11-slim as base
+
+# メタデータ
+LABEL maintainer="Quiz App Team"
+LABEL description="Quiz Application Backend - FastAPI + SQLite"
+LABEL version="1.0.0"
+
+# 作業ディレクトリ設定
+WORKDIR /app
+
+# システム依存関係
+RUN apt-get update && apt-get install -y \
+    curl \
+    sqlite3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Python依存関係のインストール
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+# 開発ステージ
+FROM base as development
+
+# 開発用の追加パッケージ
+RUN pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    black \
+    flake8
+
+# アプリケーションコードをコピー
+COPY . .
+
+# 開発用のポート公開
+EXPOSE 8000
+
+# 開発用エントリーポイント
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# 本番ステージ
+FROM base as production
+
+# 非rootユーザーの作成（セキュリティ）
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# アプリケーションコードをコピー
+COPY --chown=appuser:appuser . .
+
+# ディレクトリ作成と権限設定
+RUN mkdir -p /app/data /app/logs /app/csv_data \
+    && chown -R appuser:appuser /app/data /app/logs /app/csv_data
+
+# 非rootユーザーに切り替え
+USER appuser
+
+# ヘルスチェック設定
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+# ポート公開
+EXPOSE 8000
+
+# 本番用エントリーポイント
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+# デフォルトターゲット
+FROM production as default
